@@ -60,6 +60,10 @@ if loaded_data:
     # Calculate SHAP values
     @st.cache_resource
     def get_shap_explainer():
+        # Create a model prediction wrapper function that SHAP can call
+        def model_predict(X):
+            return model.predict_proba(X)[:,1]
+        
         # Create a background dataset for SHAP explainer
         # This is a simple example, in actual application you might need more samples
         background_data = pd.DataFrame({
@@ -75,8 +79,8 @@ if loaded_data:
         # Preprocess background data
         background_processed = preprocessor.transform(background_data[selected_features])
         
-        # Create SHAP explainer
-        return shap.Explainer(model, background_processed)
+        # Create SHAP KernelExplainer which works with any model type
+        return shap.KernelExplainer(model_predict, background_processed)
 
     # Main content area
     if st.sidebar.button("Predict"):
