@@ -11,7 +11,7 @@ st.set_option('deprecation.showPyplotGlobalUse', False)
 # Load model components
 @st.cache_resource
 def load_components():
-    model_dict = joblib.load('models/mlp_final_model.pkl')
+    model_dict = joblib.load('mlp_final_model.pkl')
     return (
         model_dict['model'], 
         model_dict['preprocessor'],
