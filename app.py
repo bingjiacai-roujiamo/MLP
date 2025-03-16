@@ -65,7 +65,6 @@ if loaded_data:
             return model.predict_proba(X)[:,1]
         
         # Create a background dataset for SHAP explainer
-        # This is a simple example, in actual application you might need more samples
         background_data = pd.DataFrame({
             'HBsAg12w': [100, 500, 1000, 5000],
             'PLT': [100, 200, 300, 400]
@@ -80,7 +79,8 @@ if loaded_data:
         background_processed = preprocessor.transform(background_data[selected_features])
         
         # Create SHAP KernelExplainer which works with any model type
-        return shap.KernelExplainer(model_predict, background_processed)
+        # Pass the actual feature names to ensure proper labeling
+        return shap.KernelExplainer(model_predict, background_processed, feature_names=selected_features)
 
     # Main content area
     if st.sidebar.button("Predict"):
@@ -152,6 +152,10 @@ if loaded_data:
         
 else:
     st.error("Unable to load model. Please ensure the model file is in the correct location.")
+
+# Add footer
+st.markdown("---")
+st.markdown("© 2025 HBsAg Seroconversion Prediction System")
 
 # Add footer
 st.markdown("---")
