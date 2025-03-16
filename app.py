@@ -57,30 +57,27 @@ if loaded_data:
         prob = model.predict_proba(processed)[0, 1]
         return prob
 
-    # Calculate SHAP values
+    # Calculate SHAP values with proper handling of standardized features
     @st.cache_resource
     def get_shap_explainer():
-        # Create a model prediction wrapper function that SHAP can call
-        def model_predict(X):
-            return model.predict_proba(X)[:,1]
+        # Create a wrapper function that transforms the data before prediction
+        def model_wrapper(X_raw):
+            # Create a DataFrame with the right column names
+            X_df = pd.DataFrame(X_raw, columns=selected_features)
+            # Apply the same preprocessing as in the model training
+            X_processed = preprocessor.transform(X_df)
+            # Get prediction probabilities
+            return model.predict_proba(X_processed)[:, 1]
         
-        # Create a background dataset for SHAP explainer
+        # Create a background dataset with raw (non-standardized) values
+        # Using realistic value ranges for each feature
         background_data = pd.DataFrame({
-            'HBsAg12w': [100, 500, 1000, 5000],
-            'PLT': [100, 200, 300, 400]
+            'HBsAg12w': [10, 50, 100, 500, 1000],
+            'PLT': [100, 150, 200, 250, 300]
         })
         
-        # Ensure all selected features are included
-        for feature in selected_features:
-            if feature not in background_data.columns:
-                background_data[feature] = 0
-        
-        # Preprocess background data
-        background_processed = preprocessor.transform(background_data[selected_features])
-        
-        # Create SHAP KernelExplainer which works with any model type
-        # Pass the actual feature names to ensure proper labeling
-        return shap.KernelExplainer(model_predict, background_processed, feature_names=selected_features)
+        # Create SHAP explainer using raw data
+        return shap.KernelExplainer(model_wrapper, background_data.values, feature_names=selected_features)
 
     # Main content area
     if st.sidebar.button("Predict"):
@@ -152,10 +149,6 @@ if loaded_data:
         
 else:
     st.error("Unable to load model. Please ensure the model file is in the correct location.")
-
-# Add footer
-st.markdown("---")
-st.markdown("© 2025 HBsAg Seroconversion Prediction System")
 
 # Add footer
 st.markdown("---")
