@@ -24,7 +24,7 @@ PLT = st.sidebar.number_input("PLT Value (×10^9/L)", min_value=0, max_value=100
 @st.cache_resource
 def load_model():
     try:
-        loaded = joblib.load('models/mlp_final_model.pkl')
+        loaded = joblib.load('mlp_final_model.pkl')
         return loaded
     except Exception as e:
         st.error(f"Error loading model: {e}")
