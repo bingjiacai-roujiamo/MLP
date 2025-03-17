@@ -4,7 +4,8 @@ import numpy as np
 import joblib
 import shap
 import matplotlib.pyplot as plt
-from PIL import Image
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 import base64
 from io import BytesIO
 
@@ -133,38 +134,70 @@ def predict_clearance(hbsag12w, plt_value):
     
     return prediction, prediction_proba, original_values, processed_data
 
-# Create a function to explain predictions with SHAP
-def explain_prediction(processed_data, original_values, prediction):
-    # Create background data for SHAP explainer
+# Alternative SHAP visualization function (without force_plot)
+def explain_prediction_alternative(processed_data, original_values, prediction):
+    # Get feature names
     feature_names = preprocessor.get_feature_names_out()
     cleaned_feature_names = [name.split('__')[-1].replace('_1', '') for name in feature_names]
     
     # Create DataFrame with processed data and cleaned feature names
     processed_df = pd.DataFrame(processed_data, columns=cleaned_feature_names)
     
-    # Create SHAP explainer
-    background_samples = shap.sample(processed_df, 50, random_state=42)
-    explainer = shap.KernelExplainer(model.predict_proba, background_samples)
+    # Create a background dataset for the explainer
+    # Try to create a small dataset for faster processing
+    background_data = np.zeros((1, processed_df.shape[1]))
     
-    # Get SHAP values for the current prediction
-    # For class 1 (clearance) if prediction is 1, otherwise for class 0
+    # Create SHAP explainer (using Explainer instead of KernelExplainer for simplicity)
+    explainer = shap.Explainer(model.predict_proba, background_data)
+    
+    # Get SHAP values
+    shap_values = explainer(processed_df)
+    
+    # Select the appropriate class
     class_idx = 1 if prediction == 1 else 0
-    shap_values = explainer.shap_values(processed_df)[class_idx]
     
-    # Create a force plot
-    fig = plt.figure(figsize=(10, 3))
-    force_plot = shap.force_plot(
-        base_value=explainer.expected_value[class_idx],
-        shap_values=shap_values,
-        features=original_values,
-        feature_names=cleaned_feature_names,
-        matplotlib=True,
-        show=False
+    # Create a manual representation of the SHAP values
+    fig, ax = plt.subplots(figsize=(10, 3))
+    
+    # Determine base value (average model output)
+    base_value = explainer.expected_value[class_idx]
+    
+    # Get SHAP values for the selected class
+    feature_shap_values = shap_values[0, :, class_idx].values
+    
+    # Create feature contribution visualization
+    features = list(original_values.iloc[0])
+    feature_names = list(original_values.columns)
+    
+    # Sort by absolute SHAP value
+    indices = np.argsort(np.abs(feature_shap_values))
+    
+    # Plot bars
+    ax.barh(
+        y=np.array(feature_names)[indices],
+        width=feature_shap_values[indices],
+        color=['red' if x > 0 else 'blue' for x in feature_shap_values[indices]]
     )
+    
+    # Add feature values to the y-axis labels
+    y_labels = [f"{name} = {value:.2f}" for name, value in 
+               zip(np.array(feature_names)[indices], np.array(features)[indices])]
+    ax.set_yticklabels(y_labels)
+    
+    # Add title and labels
+    ax.set_title(f"SHAP Values for Class {'Clearance' if class_idx == 1 else 'No Clearance'}")
+    ax.set_xlabel("SHAP Value (Impact on Prediction)")
+    
+    # Add a vertical line at x=0
+    ax.axvline(x=0, color='gray', linestyle='-', alpha=0.3)
+    
+    # Add prediction probability text
+    prob_text = f"Prediction: {'Clearance' if prediction == 1 else 'No Clearance'} ({model.predict_proba(processed_data)[0, prediction]:.2%})"
+    ax.text(0.5, -0.15, prob_text, horizontalalignment='center', transform=ax.transAxes)
     
     plt.tight_layout()
     
-    # Convert plot to image
+    # Save plot to buffer
     buf = BytesIO()
     plt.savefig(buf, format="png", dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -204,33 +237,27 @@ if st.button("Predict", type="primary"):
         
         # Generate SHAP explanation
         with st.spinner("Generating SHAP explanation..."):
-            explanation_img = explain_prediction(processed_data, original_values, prediction)
+            # Use alternative visualization method that doesn't rely on shap.force_plot
+            explanation_img = explain_prediction_alternative(processed_data, original_values, prediction)
             
             # Display SHAP explanation
             st.markdown("<h2 class='sub-header'>Prediction Explanation</h2>", unsafe_allow_html=True)
             
             if prediction == 1:
-                st.markdown("The following SHAP force plot shows how each feature contributes to predicting **HBsAg clearance** (class 1):")
+                st.markdown("The following chart shows how each feature contributes to predicting **HBsAg clearance** (class 1):")
             else:
-                st.markdown("The following SHAP force plot shows how each feature contributes to predicting **no HBsAg clearance** (class 0):")
+                st.markdown("The following chart shows how each feature contributes to predicting **no HBsAg clearance** (class 0):")
             
-            # Display the SHAP force plot
+            # Display the SHAP visualization
             st.image(explanation_img, use_column_width=True)
             
             # SHAP explanation text
             st.markdown("<h3>Interpretation:</h3>", unsafe_allow_html=True)
             st.markdown("""
-            - **Red features** push the prediction higher (toward clearance)
-            - **Blue features** push the prediction lower (against clearance)
-            - **Feature size** shows the magnitude of each feature's impact
+            - **Red bars** push the prediction toward clearance (positive impact)
+            - **Blue bars** push the prediction away from clearance (negative impact)
+            - **Bar length** shows the magnitude of each feature's impact
             """)
-            
-            st.markdown("""
-            <p class='description'>
-            The force plot shows how the model arrived at its prediction by showing how each input 
-            feature pushed the prediction away from the base value (average prediction across all patients).
-            </p>
-            """, unsafe_allow_html=True)
             
             # Additional interpretation based on medical knowledge
             st.markdown("<h3>Clinical Interpretation:</h3>", unsafe_allow_html=True)
