@@ -3,121 +3,129 @@ import joblib
 import pandas as pd
 import numpy as np
 import shap
-from sklearn.compose import ColumnTransformer
 import matplotlib.pyplot as plt
+from sklearn.compose import ColumnTransformer
 
 # Load model components
 @st.cache_resource
-def get_feature_names():
-    return [name.split('__')[-1] for name in preprocessor.get_feature_names_out()]
 def load_model_components():
     model_data = joblib.load('mlp_final_model.pkl')
     return model_data['model'], model_data['preprocessor'], model_data['features']
 
 model, preprocessor, features = load_model_components()
 
-# Create SHAP explainer with proper background
+# Create SHAP explainer
 @st.cache_resource
 def create_shap_explainer():
-    # Generate synthetic background data matching preprocessed shape
-    background = shap.utils.sample(np.zeros((1, len(features))), 50)  # Adjusted for feature count
+    # Generate representative background data
+    background = np.zeros((50, len(features)))  # 50 samples x 2 features
+    background[:, 0] = np.random.uniform(0, 1000, 50)  # HBsAg12w range
+    background[:, 1] = np.random.randint(50, 300, 50)  # PLT range
     return shap.KernelExplainer(model.predict_proba, background)
 
 explainer = create_shap_explainer()
 
-# Streamlit interface
-st.title("HBsAg Clearance Prediction")
+# Streamlit界面
+st.set_page_config(layout="wide")
+st.title("HBsAg Seroclearance Prediction System")
 st.markdown("""
 **Clinical Decision Support Tool**  
-Predicts likelihood of HBsAg seroclearance based on treatment response.
+Predicts likelihood of HBsAg seroclearance based on treatment response parameters.
 """)
 
-# Input Section
-st.header("Patient Parameters")
-input_data = {}
+# 输入部分
+with st.container():
+    st.header("Patient Parameters")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        hbsag = st.number_input(
+            '12-week HBsAg (IU/mL)', 
+            min_value=0.0,
+            max_value=10000.0,
+            value=200.0,
+            step=0.1,
+            format="%.1f"
+        )
+    
+    with col2:
+        plt_count = st.number_input(
+            'Platelet Count (×10⁹/L)', 
+            min_value=0,
+            max_value=1000,
+            value=150,
+            step=1
+        )
 
-col1, col2 = st.columns(2)
-with col1:
-    input_data['HBsAg12w'] = st.number_input(
-        '12-week HBsAg (IU/mL)', 
-        min_value=0.0,
-        max_value=50000.0,
-        value=100.0,
-        step=0.1
-    )
-with col2:
-    input_data['PLT'] = st.number_input(
-        'Platelet Count (×10⁹/L)', 
-        min_value=0,
-        max_value=1000,
-        value=150,
-        step=1
-    )
-
-# Prediction Logic
-if st.button('Prediction'):
+# 预测逻辑
+if st.button('Run Prediction Analysis'):
     try:
-        # Create input DataFrame
-        input_df = pd.DataFrame([input_data])
+        # 创建输入数据
+        input_df = pd.DataFrame([[hbsag, plt_count]], columns=features)
         
-        # Preprocess input
+        # 预处理
         processed_input = preprocessor.transform(input_df)
         
-        # Make prediction
+        # 预测
         proba = model.predict_proba(processed_input)[0]
         prediction = proba.argmax()
         
-        # Display results
-        st.subheader("Prediction Results")
+        # 显示结果
+        with st.container():
+            st.subheader("Prediction Results")
+            result_col1, result_col2 = st.columns([1, 2])
+            
+            with result_col1:
+                outcome = "High Clearance (HBsAg-)" if prediction == 1 else "Low Clearance (HBsAg+)"
+                st.metric("Predicted Outcome", outcome)
+            
+            with result_col2:
+                confidence = f"{proba[prediction]:.1%}"
+                st.metric("Confidence Score", confidence,
+                        delta=f"{(proba[prediction]-0.5):+.1%} from decision threshold")
         
-        result_col1, result_col2 = st.columns(2)
-        with result_col1:
-            st.metric("Predicted Outcome", 
-                     "High Clearance Probability" if prediction == 1 else "Low Clearance Probability")
-        with result_col2:
-            st.metric("Confidence Score", 
-                     f"{proba[prediction]:.1%}")
-        
-        # SHAP Explanation
-        st.subheader("SHAP Force Plot Interpretation")
-        
-        # 获取原始输入值（未标准化的）
-        raw_values = input_df.iloc[0].values
-        
-        # 获取特征名称
-        feature_names = [name.split('__')[-1] for name in preprocessor.get_feature_names_out()]
-        
-        # 动态选择SHAP解释类别
-        class_idx = 1 if prediction == 1 else 0
-        
-        # 计算SHAP值
-        shap_values = explainer.shap_values(processed_input)
-        
-        # 创建解释图
-        fig, ax = plt.subplots(figsize=(10, 3))
-        shap.plots.force(
-            base_value=explainer.expected_value[class_idx],
-            shap_values=shap_values[class_idx][0],
-            features=raw_values,  # 使用原始输入值
-            feature_names=feature_names,
-            matplotlib=True,
-            show=False,
-            text_rotation=15
-        )
-        
-        # 添加自定义说明
-        plt.title(f"SHAP Explanation for {'Positive' if prediction == 1 else 'Negative'} Class", 
-                 fontsize=12, pad=20)
-        plt.xlabel("Feature Impact Value", fontsize=10)
-        st.pyplot(fig)
-        plt.close()
-
+        # SHAP解释
+        with st.expander("Detailed Feature Impact Analysis"):
+            class_idx = 1 if prediction == 1 else 0
+            shap_values = explainer.shap_values(processed_input)
+            
+            # 创建解释图
+            fig, ax = plt.subplots(figsize=(12, 4))
+            shap.force_plot(
+                explainer.expected_value[class_idx],
+                shap_values[class_idx][0],
+                input_df.values[0],
+                feature_names=features,
+                matplotlib=True,
+                show=False
+            )
+            
+            # 添加自定义样式
+            plt.title(f"Feature Impact Analysis | Predicted Class: {class_idx}", fontsize=14)
+            plt.xlabel("Cumulative Effect on Prediction", fontsize=10)
+            st.pyplot(fig)
+            plt.close()
+            
+            # 添加数值解释
+            st.markdown(f"""
+            **Interpretation Guide:**
+            - Baseline Value: {explainer.expected_value[class_idx]:.2f} (Average model output)
+            - Current Prediction: {proba[prediction]:.2f}
+            - Feature Impacts: 
+              - HBsAg12w: {shap_values[class_idx][0][0]:.2f}
+              - PLT: {shap_values[class_idx][0][1]:.2f}
+            """)
+    
     except Exception as e:
-        st.error(f"Error generating explanation: {str(e)}")
+        st.error(f"Prediction Error: {str(e)}")
 
-# Add clinical disclaimer
+# 临床声明
 st.markdown("""
 ---
-**Clinical Note**: This prediction tool provides probabilistic estimates based on machine learning models. 
-Clinical decisions should always incorporate comprehensive patient evaluation and professional judgment.
+**Clinical Disclaimer:**  
+This AI prediction tool provides probabilistic estimates based on historical data analysis. Clinical decisions should always be made in conjunction with:  
+- Comprehensive patient evaluation  
+- Laboratory findings verification  
+- Professional clinical judgment  
+- Latest clinical guidelines  
 """)
