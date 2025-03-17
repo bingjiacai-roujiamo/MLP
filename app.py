@@ -95,7 +95,7 @@ if st.button('Prediction'):
         
         # 创建解释图
         fig, ax = plt.subplots(figsize=(10, 3))
-        shap.force_plot(
+        shap.plots.force(
             base_value=explainer.expected_value[class_idx],
             shap_values=shap_values[class_idx][0],
             features=raw_values,  # 使用原始输入值
