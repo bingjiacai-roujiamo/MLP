@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 
 # Load model components
 @st.cache_resource
+def get_feature_names():
+    return [name.split('__')[-1] for name in preprocessor.get_feature_names_out()]
 def load_model_components():
     model_data = joblib.load('mlp_final_model.pkl')
     return model_data['model'], model_data['preprocessor'], model_data['features']
@@ -53,7 +55,7 @@ with col2:
     )
 
 # Prediction Logic
-if st.button('Predict Outcomes'):
+if st.button('Prediction'):
     try:
         # Create input DataFrame
         input_df = pd.DataFrame([input_data])
@@ -77,30 +79,41 @@ if st.button('Predict Outcomes'):
                      f"{proba[prediction]:.1%}")
         
         # SHAP Explanation
-        st.subheader("Feature Contribution Analysis")
+        st.subheader("SHAP Force Plot Interpretation")
         
-        # Get SHAP values
+        # 获取原始输入值（未标准化的）
+        raw_values = input_df.iloc[0].values
+        
+        # 获取特征名称
+        feature_names = [name.split('__')[-1] for name in preprocessor.get_feature_names_out()]
+        
+        # 动态选择SHAP解释类别
+        class_idx = 1 if prediction == 1 else 0
+        
+        # 计算SHAP值
         shap_values = explainer.shap_values(processed_input)
         
-        # Select explanation based on prediction class
-        class_idx = 1 if prediction == 1 else 0
-        feature_names = preprocessor.get_feature_names_out()
-        
-        # Create force plot
-        plt.figure(figsize=(10, 4))
+        # 创建解释图
+        fig, ax = plt.subplots(figsize=(10, 3))
         shap.force_plot(
-            explainer.expected_value[class_idx],
-            shap_values[class_idx][0],
-            processed_input[0],
+            base_value=explainer.expected_value[class_idx],
+            shap_values=shap_values[class_idx][0],
+            features=raw_values,  # 使用原始输入值
             feature_names=feature_names,
             matplotlib=True,
-            show=False
+            show=False,
+            text_rotation=15
         )
-        st.pyplot(plt.gcf())
-        plt.clf()
         
+        # 添加自定义说明
+        plt.title(f"SHAP Explanation for {'Positive' if prediction == 1 else 'Negative'} Class", 
+                 fontsize=12, pad=20)
+        plt.xlabel("Feature Impact Value", fontsize=10)
+        st.pyplot(fig)
+        plt.close()
+
     except Exception as e:
-        st.error(f"Prediction error: {str(e)}")
+        st.error(f"Error generating explanation: {str(e)}")
 
 # Add clinical disclaimer
 st.markdown("""
