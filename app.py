@@ -54,7 +54,7 @@ st.markdown("<h1 class='main-header'>HBV Surface Antigen Clearance Prediction</h
 # Load model
 @st.cache_resource
 def load_model():
-    return joblib.load('models/mlp_final_model.pkl')
+    return joblib.load('mlp_final_model.pkl')
 
 try:
     model_data = load_model()
