@@ -63,9 +63,6 @@ if submitted:
         input_data = pd.DataFrame([[hbsag_12w, plt_count]],
                                 columns=['HBsAg12w', 'PLT'])
         
-        # Apply log transformation for HBsAg12w (if your model requires it)
-        input_data['HBsAg12w'] = np.log10(input_data['HBsAg12w'])
-        
         # Preprocess input
         processed_input = preprocessor.transform(input_data)
         
