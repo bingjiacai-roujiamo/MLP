@@ -90,7 +90,7 @@ if st.button('Predict Outcomes'):
         plt.figure(figsize=(10, 4))
         shap.force_plot(
             explainer.expected_value[class_idx],
-            shap_values[class_idx][0],
+            shap_values[;,;,0],
             processed_input[0],
             feature_names=feature_names,
             matplotlib=True,
