@@ -4,302 +4,251 @@ import numpy as np
 import joblib
 import shap
 import matplotlib.pyplot as plt
-from io import BytesIO
+from PIL import Image
 import base64
+from io import BytesIO
 
-# Set page config
+# Page configuration
 st.set_page_config(
-    page_title="HBsAg Seroconversion Prediction",
+    page_title="HBV Surface Antigen Clearance Prediction",
     page_icon="🧬",
     layout="wide"
 )
 
-# Custom CSS for better styling
+# Custom CSS for styling
 st.markdown("""
 <style>
-    .main {
-        padding: 2rem;
-    }
-    .stApp {
-        max-width: 1200px;
-        margin: 0 auto;
-    }
-    h1, h2, h3 {
+    .main-header {
+        font-size: 2.5rem;
         color: #1E88E5;
-    }
-    .explanation {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 10px;
-        margin-bottom: 1rem;
-    }
-    .prediction-box {
-        padding: 20px;
-        border-radius: 10px;
         text-align: center;
-        margin-bottom: 20px;
     }
-    .positive-prediction {
-        background-color: #c8e6c9;
+    .sub-header {
+        font-size: 1.5rem;
+        color: #0D47A1;
     }
-    .negative-prediction {
-        background-color: #ffcdd2;
+    .result-positive {
+        font-size: 1.8rem;
+        color: #2E7D32;
+        font-weight: bold;
+    }
+    .result-negative {
+        font-size: 1.8rem;
+        color: #C62828;
+        font-weight: bold;
+    }
+    .description {
+        font-size: 1rem;
+        line-height: 1.6;
+    }
+    .probability {
+        font-size: 1.5rem;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# Title
+st.markdown("<h1 class='main-header'>HBV Surface Antigen Clearance Prediction</h1>", unsafe_allow_html=True)
+
+# Load model
 @st.cache_resource
 def load_model():
-    """Load the trained model and preprocessor"""
-    return joblib.load('mlp_final_model.pkl')
+    return joblib.load('models/mlp_final_model.pkl')
 
-def preprocess_input(input_data, preprocessor, features):
-    """Preprocess the input data using the saved preprocessor"""
-    # Convert to DataFrame with the right format
-    df = pd.DataFrame([input_data], columns=features)
-    # Apply preprocessing
-    return preprocessor.transform(df)
+try:
+    model_data = load_model()
+    model = model_data['model']
+    preprocessor = model_data['preprocessor']
+    features = model_data['features']
+    st.success("Model loaded successfully!")
+except Exception as e:
+    st.error(f"Error loading model: {e}")
+    st.stop()
 
-def get_shap_plot(model, processed_data, original_data, features, class_idx):
-    """Generate SHAP waterfall plot for explanation"""
-    # Create a background dataset for the explainer
-    explainer = shap.KernelExplainer(
-        lambda x: model.predict_proba(x)[:, class_idx], 
-        shap.sample(processed_data, 5)  # Use minimal background
+# Sidebar
+st.sidebar.markdown("<h2 class='sub-header'>About</h2>", unsafe_allow_html=True)
+st.sidebar.markdown("""
+<p class='description'>
+This app predicts the probability of HBV surface antigen clearance based on two key features:
+HBsAg12w (HBsAg at 12 weeks) and PLT (Platelet count).
+</p>
+<p class='description'>
+The model was trained using a Neural Network (Multi-Layer Perceptron) classifier.
+</p>
+""", unsafe_allow_html=True)
+
+st.sidebar.markdown("<h2 class='sub-header'>Instructions</h2>", unsafe_allow_html=True)
+st.sidebar.markdown("""
+<p class='description'>
+1. Enter the patient's HBsAg12w value and PLT value
+2. Click the 'Predict' button
+3. View the prediction result and SHAP explanation
+</p>
+""", unsafe_allow_html=True)
+
+# Main content
+st.markdown("<h2 class='sub-header'>Patient Data Input</h2>", unsafe_allow_html=True)
+
+# Create two columns for input
+col1, col2 = st.columns(2)
+
+with col1:
+    hbsag12w = st.number_input(
+        "HBsAg12w (IU/ml)",
+        min_value=0.0,
+        max_value=10000.0,
+        value=100.0,
+        step=10.0,
+        help="HBsAg level at 12 weeks"
+    )
+
+with col2:
+    plt_value = st.number_input(
+        "PLT (×10^9/L)",
+        min_value=0.0,
+        max_value=1000.0,
+        value=150.0,
+        step=10.0,
+        help="Platelet count"
+    )
+
+# Create a prediction function
+def predict_clearance(hbsag12w, plt_value):
+    # Create a DataFrame with the input data
+    input_data = pd.DataFrame({
+        'HBsAg12w': [hbsag12w],
+        'PLT': [plt_value]
+    })
+    
+    # Save original values for SHAP explanation
+    original_values = input_data.copy()
+    
+    # Preprocess the input data
+    processed_data = preprocessor.transform(input_data)
+    
+    # Make prediction
+    prediction_proba = model.predict_proba(processed_data)[0, 1]
+    prediction = 1 if prediction_proba >= 0.5 else 0
+    
+    return prediction, prediction_proba, original_values, processed_data
+
+# Create a function to explain predictions with SHAP
+def explain_prediction(processed_data, original_values, prediction):
+    # Create background data for SHAP explainer
+    feature_names = preprocessor.get_feature_names_out()
+    cleaned_feature_names = [name.split('__')[-1].replace('_1', '') for name in feature_names]
+    
+    # Create DataFrame with processed data and cleaned feature names
+    processed_df = pd.DataFrame(processed_data, columns=cleaned_feature_names)
+    
+    # Create SHAP explainer
+    background_samples = shap.sample(processed_df, 50, random_state=42)
+    explainer = shap.KernelExplainer(model.predict_proba, background_samples)
+    
+    # Get SHAP values for the current prediction
+    # For class 1 (clearance) if prediction is 1, otherwise for class 0
+    class_idx = 1 if prediction == 1 else 0
+    shap_values = explainer.shap_values(processed_df)[class_idx]
+    
+    # Create a force plot
+    fig = plt.figure(figsize=(10, 3))
+    force_plot = shap.force_plot(
+        base_value=explainer.expected_value[class_idx],
+        shap_values=shap_values,
+        features=original_values,
+        feature_names=cleaned_feature_names,
+        matplotlib=True,
+        show=False
     )
     
-    # Calculate SHAP values for the processed input
-    shap_values = explainer.shap_values(processed_data)
-    
-    # Create matplotlib figure for waterfall plot (more reliable than force plot in Streamlit)
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # Create a waterfall plot using matplotlib
-    feature_names = features
-    feature_values = list(original_data.values())
-    
-    # Sort SHAP values and corresponding features by absolute magnitude
-    indices = np.argsort(np.abs(shap_values))
-    sorted_shap_values = np.array(shap_values)[indices]
-    sorted_feature_names = [feature_names[i] for i in indices]
-    sorted_feature_values = [feature_values[i] for i in indices]
-    
-    # Calculate cumulative SHAP values for waterfall
-    base_value = explainer.expected_value
-    cumulative = np.cumsum(sorted_shap_values)
-    total_shap = np.sum(shap_values)
-    
-    # Colors for positive and negative contributions
-    colors = ['#ff4d4d' if v > 0 else '#1e88e5' for v in sorted_shap_values]
-    
-    # Plot bars
-    y_pos = np.arange(len(sorted_feature_names) + 1)
-    
-    # Plot horizontal lines
-    for i in range(len(sorted_shap_values)):
-        plt.plot([base_value + cumulative[i] - sorted_shap_values[i], 
-                  base_value + cumulative[i]], 
-                 [y_pos[i], y_pos[i]], 
-                 'k-', alpha=0.3)
-    
-    # Plot vertical lines
-    for i in range(len(sorted_shap_values)):
-        plt.plot([base_value + cumulative[i], base_value + cumulative[i]], 
-                 [y_pos[i], y_pos[i+1]], 
-                 'k-', alpha=0.3)
-    
-    # Add final prediction line
-    plt.plot([base_value + total_shap, base_value + total_shap], 
-             [y_pos[-2], y_pos[-1]], 
-             'k-', alpha=0.3)
-    
-    # Plot bars for SHAP values
-    barlist = plt.barh(y_pos[:-1], sorted_shap_values, align='center', alpha=0.7)
-    for i, bar in enumerate(barlist):
-        bar.set_color(colors[i])
-    
-    # Add feature names and values as y-tick labels
-    labels = [f"{name} = {value:.3g}" for name, value in zip(sorted_feature_names, sorted_feature_values)]
-    labels.append("Prediction")
-    plt.yticks(y_pos, labels)
-    
-    # Add base value and prediction
-    plt.axvline(x=base_value, color='black', linestyle='-', alpha=0.3)
-    plt.text(base_value, len(sorted_feature_names) + 0.5, f'Base value: {base_value:.3f}', 
-             ha='center', va='center', bbox=dict(facecolor='white', alpha=0.7))
-    
-    # Final prediction value
-    prediction_value = base_value + total_shap
-    plt.text(prediction_value, len(sorted_feature_names) + 0.5, 
-             f'Final prediction: {prediction_value:.3f}', 
-             ha='center', va='center', bbox=dict(facecolor='white', alpha=0.7))
-    
-    # Add title and labels
-    plt.title(f'SHAP Explanation for Class {class_idx} Prediction')
-    plt.xlabel('SHAP Value (Impact on Prediction)')
-    plt.xlim(min(base_value - abs(base_value)*0.5, base_value + min(0, total_shap) - 0.1),
-             max(base_value + abs(base_value)*0.5, base_value + max(0, total_shap) + 0.1))
-    
     plt.tight_layout()
-    return fig
+    
+    # Convert plot to image
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    
+    return buf
 
-# Alternative simpler SHAP visualization function as backup
-def get_simple_shap_plot(model, processed_data, features, class_idx):
-    """Generate a simpler SHAP bar plot for explanation (backup option)"""
-    # Create background and explainer
-    explainer = shap.KernelExplainer(
-        lambda x: model.predict_proba(x)[:, class_idx],
-        shap.sample(processed_data, 5)
-    )
-    
-    # Calculate SHAP values
-    shap_values = explainer.shap_values(processed_data)
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 4))
-    
-    # Plot bar chart of SHAP values
-    y_pos = np.arange(len(features))
-    bars = ax.barh(y_pos, shap_values, align='center')
-    
-    # Color bars based on contribution direction
-    for i, bar in enumerate(bars):
-        bar.set_color('#ff4d4d' if shap_values[i] > 0 else '#1e88e5')
-    
-    # Add feature names
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(features)
-    
-    # Add labels and title
-    ax.set_xlabel('SHAP Value (Impact on Prediction)')
-    ax.set_title(f'Feature Importance for Class {class_idx} Prediction')
-    
-    # Add a vertical line at x=0
-    ax.axvline(x=0, color='black', linestyle='-', alpha=0.3)
-    
-    plt.tight_layout()
-    return fig
-
-def main():
-    # Load model components
-    loaded_data = load_model()
-    model = loaded_data['model']
-    preprocessor = loaded_data['preprocessor']
-    features = loaded_data['features']
-    
-    # Header
-    st.title("HBsAg Seroconversion Prediction Tool")
-    
-    # Information section
-    with st.expander("About this app", expanded=False):
-        st.markdown("""
-        This application predicts the probability of HBsAg seroconversion based on two key features:
+# Prediction button
+if st.button("Predict", type="primary"):
+    # Add a spinner during prediction
+    with st.spinner("Generating prediction..."):
+        # Make prediction
+        prediction, probability, original_values, processed_data = predict_clearance(hbsag12w, plt_value)
         
-        - **HBsAg12w**: HBsAg level at week 12
-        - **PLT**: Platelet count
+        # Display results in a nice box
+        st.markdown("---")
+        st.markdown("<h2 class='sub-header'>Prediction Results</h2>", unsafe_allow_html=True)
         
-        The model was built using a Neural Network (MLP) trained on clinical data.
-        Enter your values below to get a prediction and see the explanation.
-        """)
-    
-    # Input form
-    st.header("Patient Data Input")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        hbsag12w = st.number_input(
-            "HBsAg at Week 12 (IU/mL)", 
-            min_value=0.0, 
-            value=100.0,
-            help="Enter the HBsAg level at week 12 of treatment"
-        )
-    
-    with col2:
-        plt_value = st.number_input(
-            "Platelet Count (×10^9/L)",
-            min_value=0.0,
-            value=150.0,
-            help="Enter the platelet count"
-        )
-    
-    # Create input data dictionary
-    input_data = {
-        'HBsAg12w': hbsag12w,
-        'PLT': plt_value
-    }
-    
-    # Prediction section
-    st.header("Prediction")
-    
-    if st.button("Predict Seroconversion"):
-        # Process input
-        input_df = pd.DataFrame([input_data])
-        processed_input = preprocessor.transform(input_df[features])
+        result_container = st.container()
         
-        # Get prediction and probability
-        prediction = model.predict(processed_input)[0]
-        probabilities = model.predict_proba(processed_input)[0]
-        
-        # Display prediction
-        if prediction == 1:
-            st.markdown(f"""
-            <div class="prediction-box positive-prediction">
-                <h2>Likely to achieve HBsAg seroconversion</h2>
-                <h3>Probability: {probabilities[1]:.2%}</h3>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="prediction-box negative-prediction">
-                <h2>Unlikely to achieve HBsAg seroconversion</h2>
-                <h3>Probability: {probabilities[0]:.2%}</h3>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # Display SHAP explanation
-        st.header("Prediction Explanation")
-        
-        # Get SHAP visualization - try the custom waterfall plot first
-        class_to_explain = int(prediction)  # 0 or 1 based on prediction
-        
-        try:
-            # Try the custom waterfall SHAP plot first
-            fig = get_shap_plot(model, processed_input, input_data, features, class_to_explain)
-            # Display the plot
-            st.pyplot(fig)
-        except Exception as e:
-            st.warning("Advanced visualization unavailable. Showing simplified explanation.")
-            # If that fails, use the simpler bar plot
-            try:
-                fig = get_simple_shap_plot(model, processed_input, features, class_to_explain)
-                st.pyplot(fig)
-            except Exception as e2:
-                st.error("Unable to generate explanation visualization.")
-                st.write(f"Error details: {str(e2)}")
-        
-        # Add explanation text
-        st.markdown("""
-        <div class="explanation">
-            <p><strong>How to interpret:</strong> The SHAP plot above shows how each feature contributed to the prediction.
-            Red bars push the prediction higher (toward seroconversion), while blue bars push it lower (against seroconversion).
-            The length of each bar indicates the magnitude of that feature's impact.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Display raw input and processed values for reference
-        with st.expander("Technical Details"):
-            st.subheader("Original Input Values")
-            st.write(input_data)
+        with result_container:
+            col1, col2 = st.columns(2)
             
-            st.subheader("Processed Input Values (after preprocessing)")
-            st.write(pd.DataFrame(processed_input, columns=preprocessor.get_feature_names_out()))
+            with col1:
+                if prediction == 1:
+                    st.markdown("<p class='result-positive'>HBsAg Clearance Expected</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='probability'>Probability: {probability:.2%}</p>", unsafe_allow_html=True)
+                else:
+                    st.markdown("<p class='result-negative'>HBsAg Clearance Not Expected</p>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='probability'>Probability: {probability:.2%}</p>", unsafe_allow_html=True)
             
-            st.subheader("Prediction Probabilities")
-            st.write({
-                "No Seroconversion (Class 0)": f"{probabilities[0]:.4f}",
-                "Seroconversion (Class 1)": f"{probabilities[1]:.4f}"
-            })
+            with col2:
+                # Input parameters summary
+                st.markdown("<h3>Input Parameters:</h3>", unsafe_allow_html=True)
+                st.write(f"**HBsAg12w:** {hbsag12w:.2f} IU/ml")
+                st.write(f"**PLT:** {plt_value:.2f} ×10^9/L")
+        
+        # Generate SHAP explanation
+        with st.spinner("Generating SHAP explanation..."):
+            explanation_img = explain_prediction(processed_data, original_values, prediction)
+            
+            # Display SHAP explanation
+            st.markdown("<h2 class='sub-header'>Prediction Explanation</h2>", unsafe_allow_html=True)
+            
+            if prediction == 1:
+                st.markdown("The following SHAP force plot shows how each feature contributes to predicting **HBsAg clearance** (class 1):")
+            else:
+                st.markdown("The following SHAP force plot shows how each feature contributes to predicting **no HBsAg clearance** (class 0):")
+            
+            # Display the SHAP force plot
+            st.image(explanation_img, use_column_width=True)
+            
+            # SHAP explanation text
+            st.markdown("<h3>Interpretation:</h3>", unsafe_allow_html=True)
+            st.markdown("""
+            - **Red features** push the prediction higher (toward clearance)
+            - **Blue features** push the prediction lower (against clearance)
+            - **Feature size** shows the magnitude of each feature's impact
+            """)
+            
+            st.markdown("""
+            <p class='description'>
+            The force plot shows how the model arrived at its prediction by showing how each input 
+            feature pushed the prediction away from the base value (average prediction across all patients).
+            </p>
+            """, unsafe_allow_html=True)
+            
+            # Additional interpretation based on medical knowledge
+            st.markdown("<h3>Clinical Interpretation:</h3>", unsafe_allow_html=True)
+            
+            if hbsag12w < 100:
+                st.markdown("- **Lower HBsAg12w values** are typically associated with higher clearance rates")
+            else:
+                st.markdown("- **Higher HBsAg12w values** typically indicate lower chances of clearance")
+                
+            if plt_value > 150:
+                st.markdown("- **Higher platelet counts (PLT)** may indicate better liver function and potentially better response")
+            else:
+                st.markdown("- **Lower platelet counts (PLT)** may indicate compromised liver function")
 
-if __name__ == "__main__":
-    main()
+# Footer
+st.markdown("---")
+st.markdown("""
+<p style='text-align: center; color: gray;'>
+This app is for research and educational purposes only. Always consult with a healthcare professional for medical advice.
+</p>
+""", unsafe_allow_html=True)
