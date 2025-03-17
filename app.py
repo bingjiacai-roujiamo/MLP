@@ -5,7 +5,7 @@ import shap
 import matplotlib.pyplot as plt
 
 # Load the saved model
-saved_model = joblib.load('models/mlp_final_model.pkl')
+saved_model = joblib.load('mlp_final_model.pkl')
 final_model = saved_model['model']
 final_preprocessor = saved_model['preprocessor']
 selected_features = saved_model['features']
