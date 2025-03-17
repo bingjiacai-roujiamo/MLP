@@ -51,7 +51,7 @@ st.markdown("""
 @st.cache_resource
 def load_model():
     """Load the trained model and preprocessor"""
-    return joblib.load('models/mlp_final_model.pkl')
+    return joblib.load('mlp_final_model.pkl')
 
 def preprocess_input(input_data, preprocessor, features):
     """Preprocess the input data using the saved preprocessor"""
