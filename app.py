@@ -1,131 +1,209 @@
 import streamlit as st
-import joblib
 import pandas as pd
 import numpy as np
+import joblib
 import shap
 import matplotlib.pyplot as plt
-from sklearn.compose import ColumnTransformer
+from io import BytesIO
+import base64
 
-# Load model components
-@st.cache_resource
-def load_model_components():
-    model_data = joblib.load('mlp_final_model.pkl')
-    return model_data['model'], model_data['preprocessor'], model_data['features']
+# Set page config
+st.set_page_config(
+    page_title="HBsAg Seroconversion Prediction",
+    page_icon="🧬",
+    layout="wide"
+)
 
-model, preprocessor, features = load_model_components()
-
-# Create SHAP explainer
-@st.cache_resource
-def create_shap_explainer():
-    # Generate representative background data
-    background = np.zeros((50, len(features)))  # 50 samples x 2 features
-    background[:, 0] = np.random.uniform(0, 1000, 50)  # HBsAg12w range
-    background[:, 1] = np.random.randint(50, 300, 50)  # PLT range
-    return shap.KernelExplainer(model.predict_proba, background)
-
-explainer = create_shap_explainer()
-
-# Streamlit界面
-st.set_page_config(layout="wide")
-st.title("HBsAg Seroclearance Prediction System")
+# Custom CSS for better styling
 st.markdown("""
-**Clinical Decision Support Tool**  
-Predicts likelihood of HBsAg seroclearance based on treatment response parameters.
-""")
+<style>
+    .main {
+        padding: 2rem;
+    }
+    .stApp {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    h1, h2, h3 {
+        color: #1E88E5;
+    }
+    .explanation {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 10px;
+        margin-bottom: 1rem;
+    }
+    .prediction-box {
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        margin-bottom: 20px;
+    }
+    .positive-prediction {
+        background-color: #c8e6c9;
+    }
+    .negative-prediction {
+        background-color: #ffcdd2;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# 输入部分
-with st.container():
-    st.header("Patient Parameters")
+@st.cache_resource
+def load_model():
+    """Load the trained model and preprocessor"""
+    return joblib.load('models/mlp_final_model.pkl')
+
+def preprocess_input(input_data, preprocessor, features):
+    """Preprocess the input data using the saved preprocessor"""
+    # Convert to DataFrame with the right format
+    df = pd.DataFrame([input_data], columns=features)
+    # Apply preprocessing
+    return preprocessor.transform(df)
+
+def get_shap_plot(model, processed_data, original_data, features, class_idx):
+    """Generate SHAP force plot for explanation"""
+    # Create a background dataset (using empty DataFrame with feature names)
+    background_data = pd.DataFrame(columns=features)
+    
+    # Initialize the SHAP explainer
+    explainer = shap.KernelExplainer(
+        model.predict_proba, 
+        shap.sample(processed_data, 1)  # Use minimal background
+    )
+    
+    # Get SHAP values for the processed input
+    shap_values = explainer.shap_values(processed_data)
+    
+    # Convert processed_data to DataFrame for better visualization
+    processed_df = pd.DataFrame(processed_data, columns=features)
+    
+    # Create matplotlib figure
+    fig, ax = plt.subplots(figsize=(10, 4))
+    
+    # Plot SHAP force plot
+    shap.force_plot(
+        base_value=explainer.expected_value[class_idx],
+        shap_values=shap_values[class_idx][0],
+        features=original_data,
+        feature_names=features,
+        matplotlib=True,
+        show=False,
+        axis=ax
+    )
+    
+    # Adjust layout
+    fig.tight_layout()
+    return fig
+
+def main():
+    # Load model components
+    loaded_data = load_model()
+    model = loaded_data['model']
+    preprocessor = loaded_data['preprocessor']
+    features = loaded_data['features']
+    
+    # Header
+    st.title("HBsAg Seroconversion Prediction Tool")
+    
+    # Information section
+    with st.expander("About this app", expanded=False):
+        st.markdown("""
+        This application predicts the probability of HBsAg seroconversion based on two key features:
+        
+        - **HBsAg12w**: HBsAg level at week 12
+        - **PLT**: Platelet count
+        
+        The model was built using a Neural Network (MLP) trained on clinical data.
+        Enter your values below to get a prediction and see the explanation.
+        """)
+    
+    # Input form
+    st.header("Patient Data Input")
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        hbsag = st.number_input(
-            '12-week HBsAg (IU/mL)', 
-            min_value=0.0,
-            max_value=10000.0,
-            value=200.0,
-            step=0.1,
-            format="%.1f"
+        hbsag12w = st.number_input(
+            "HBsAg at Week 12 (IU/mL)", 
+            min_value=0.0, 
+            value=100.0,
+            help="Enter the HBsAg level at week 12 of treatment"
         )
     
     with col2:
-        plt_count = st.number_input(
-            'Platelet Count (×10⁹/L)', 
-            min_value=0,
-            max_value=1000,
-            value=150,
-            step=1
+        plt_value = st.number_input(
+            "Platelet Count (×10^9/L)",
+            min_value=0.0,
+            value=150.0,
+            help="Enter the platelet count"
         )
-
-# 预测逻辑
-if st.button('Run Prediction Analysis'):
-    try:
-        # 创建输入数据
-        input_df = pd.DataFrame([[hbsag, plt_count]], columns=features)
-        
-        # 预处理
-        processed_input = preprocessor.transform(input_df)
-        
-        # 预测
-        proba = model.predict_proba(processed_input)[0]
-        prediction = proba.argmax()
-        
-        # 显示结果
-        with st.container():
-            st.subheader("Prediction Results")
-            result_col1, result_col2 = st.columns([1, 2])
-            
-            with result_col1:
-                outcome = "High Clearance (HBsAg-)" if prediction == 1 else "Low Clearance (HBsAg+)"
-                st.metric("Predicted Outcome", outcome)
-            
-            with result_col2:
-                confidence = f"{proba[prediction]:.1%}"
-                st.metric("Confidence Score", confidence,
-                        delta=f"{(proba[prediction]-0.5):+.1%} from decision threshold")
-        
-        # SHAP解释
-        with st.expander("Detailed Feature Impact Analysis"):
-            class_idx = 1 if prediction == 1 else 0
-            shap_values = explainer.shap_values(processed_input)
-            
-            # 创建解释图
-            fig, ax = plt.subplots(figsize=(12, 4))
-            shap.force_plot(
-                explainer.expected_value[class_idx],
-                shap_values[class_idx][0],
-                input_df.values[0],
-                feature_names=features,
-                matplotlib=True,
-                show=False
-            )
-            
-            # 添加自定义样式
-            plt.title(f"Feature Impact Analysis | Predicted Class: {class_idx}", fontsize=14)
-            plt.xlabel("Cumulative Effect on Prediction", fontsize=10)
-            st.pyplot(fig)
-            plt.close()
-            
-            # 添加数值解释
-            st.markdown(f"""
-            **Interpretation Guide:**
-            - Baseline Value: {explainer.expected_value[class_idx]:.2f} (Average model output)
-            - Current Prediction: {proba[prediction]:.2f}
-            - Feature Impacts: 
-              - HBsAg12w: {shap_values[class_idx][0][0]:.2f}
-              - PLT: {shap_values[class_idx][0][1]:.2f}
-            """)
     
-    except Exception as e:
-        st.error(f"Prediction Error: {str(e)}")
+    # Create input data dictionary
+    input_data = {
+        'HBsAg12w': hbsag12w,
+        'PLT': plt_value
+    }
+    
+    # Prediction section
+    st.header("Prediction")
+    
+    if st.button("Predict Seroconversion"):
+        # Process input
+        input_df = pd.DataFrame([input_data])
+        processed_input = preprocessor.transform(input_df[features])
+        
+        # Get prediction and probability
+        prediction = model.predict(processed_input)[0]
+        probabilities = model.predict_proba(processed_input)[0]
+        
+        # Display prediction
+        if prediction == 1:
+            st.markdown(f"""
+            <div class="prediction-box positive-prediction">
+                <h2>Likely to achieve HBsAg seroconversion</h2>
+                <h3>Probability: {probabilities[1]:.2%}</h3>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="prediction-box negative-prediction">
+                <h2>Unlikely to achieve HBsAg seroconversion</h2>
+                <h3>Probability: {probabilities[0]:.2%}</h3>
+            </div>
+            """, unsafe_allow_html=True)
 
-# 临床声明
-st.markdown("""
----
-**Clinical Disclaimer:**  
-This AI prediction tool provides probabilistic estimates based on historical data analysis. Clinical decisions should always be made in conjunction with:  
-- Comprehensive patient evaluation  
-- Laboratory findings verification  
-- Professional clinical judgment  
-- Latest clinical guidelines  
-""")
+        # Display SHAP explanation
+        st.header("Prediction Explanation")
+        
+        # Get SHAP visualization
+        class_to_explain = int(prediction)  # 0 or 1 based on prediction
+        fig = get_shap_plot(model, processed_input, input_data, features, class_to_explain)
+        
+        # Display the plot
+        st.pyplot(fig)
+        
+        # Add explanation text
+        st.markdown("""
+        <div class="explanation">
+            <p><strong>How to interpret:</strong> The SHAP force plot above shows how each feature contributed to the prediction.
+            Red arrows push the prediction higher (toward seroconversion), while blue arrows push it lower (against seroconversion).
+            The width of each arrow indicates the magnitude of that feature's impact.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Display raw input and processed values for reference
+        with st.expander("Technical Details"):
+            st.subheader("Original Input Values")
+            st.write(input_data)
+            
+            st.subheader("Processed Input Values (after preprocessing)")
+            st.write(pd.DataFrame(processed_input, columns=preprocessor.get_feature_names_out()))
+            
+            st.subheader("Prediction Probabilities")
+            st.write({
+                "No Seroconversion (Class 0)": f"{probabilities[0]:.4f}",
+                "Seroconversion (Class 1)": f"{probabilities[1]:.4f}"
+            })
+
+if __name__ == "__main__":
+    main()
