@@ -42,7 +42,7 @@ with st.form("prediction_form"):
             min_value=0.0,
             max_value=50000.0,
             value=100.0,
-            step=0.1
+            step=0.01
         )
         
     with col2:
