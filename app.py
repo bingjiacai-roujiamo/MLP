@@ -61,38 +61,123 @@ def preprocess_input(input_data, preprocessor, features):
     return preprocessor.transform(df)
 
 def get_shap_plot(model, processed_data, original_data, features, class_idx):
-    """Generate SHAP force plot for explanation"""
-    # Create a background dataset (using empty DataFrame with feature names)
-    background_data = pd.DataFrame(columns=features)
-    
-    # Initialize the SHAP explainer
+    """Generate SHAP waterfall plot for explanation"""
+    # Create a background dataset for the explainer
     explainer = shap.KernelExplainer(
-        model.predict_proba, 
-        shap.sample(processed_data, 1)  # Use minimal background
+        lambda x: model.predict_proba(x)[:, class_idx], 
+        shap.sample(processed_data, 5)  # Use minimal background
     )
     
-    # Get SHAP values for the processed input
+    # Calculate SHAP values for the processed input
     shap_values = explainer.shap_values(processed_data)
     
-    # Convert processed_data to DataFrame for better visualization
-    processed_df = pd.DataFrame(processed_data, columns=features)
+    # Create matplotlib figure for waterfall plot (more reliable than force plot in Streamlit)
+    fig, ax = plt.subplots(figsize=(10, 6))
     
-    # Create matplotlib figure
-    fig, ax = plt.subplots(figsize=(10, 4))
+    # Create a waterfall plot using matplotlib
+    feature_names = features
+    feature_values = list(original_data.values())
     
-    # Plot SHAP force plot
-    shap.force_plot(
-        base_value=explainer.expected_value[class_idx],
-        shap_values=shap_values[class_idx][0],
-        features=original_data,
-        feature_names=features,
-        matplotlib=True,
-        show=False,
-        axis=ax
+    # Sort SHAP values and corresponding features by absolute magnitude
+    indices = np.argsort(np.abs(shap_values))
+    sorted_shap_values = np.array(shap_values)[indices]
+    sorted_feature_names = [feature_names[i] for i in indices]
+    sorted_feature_values = [feature_values[i] for i in indices]
+    
+    # Calculate cumulative SHAP values for waterfall
+    base_value = explainer.expected_value
+    cumulative = np.cumsum(sorted_shap_values)
+    total_shap = np.sum(shap_values)
+    
+    # Colors for positive and negative contributions
+    colors = ['#ff4d4d' if v > 0 else '#1e88e5' for v in sorted_shap_values]
+    
+    # Plot bars
+    y_pos = np.arange(len(sorted_feature_names) + 1)
+    
+    # Plot horizontal lines
+    for i in range(len(sorted_shap_values)):
+        plt.plot([base_value + cumulative[i] - sorted_shap_values[i], 
+                  base_value + cumulative[i]], 
+                 [y_pos[i], y_pos[i]], 
+                 'k-', alpha=0.3)
+    
+    # Plot vertical lines
+    for i in range(len(sorted_shap_values)):
+        plt.plot([base_value + cumulative[i], base_value + cumulative[i]], 
+                 [y_pos[i], y_pos[i+1]], 
+                 'k-', alpha=0.3)
+    
+    # Add final prediction line
+    plt.plot([base_value + total_shap, base_value + total_shap], 
+             [y_pos[-2], y_pos[-1]], 
+             'k-', alpha=0.3)
+    
+    # Plot bars for SHAP values
+    barlist = plt.barh(y_pos[:-1], sorted_shap_values, align='center', alpha=0.7)
+    for i, bar in enumerate(barlist):
+        bar.set_color(colors[i])
+    
+    # Add feature names and values as y-tick labels
+    labels = [f"{name} = {value:.3g}" for name, value in zip(sorted_feature_names, sorted_feature_values)]
+    labels.append("Prediction")
+    plt.yticks(y_pos, labels)
+    
+    # Add base value and prediction
+    plt.axvline(x=base_value, color='black', linestyle='-', alpha=0.3)
+    plt.text(base_value, len(sorted_feature_names) + 0.5, f'Base value: {base_value:.3f}', 
+             ha='center', va='center', bbox=dict(facecolor='white', alpha=0.7))
+    
+    # Final prediction value
+    prediction_value = base_value + total_shap
+    plt.text(prediction_value, len(sorted_feature_names) + 0.5, 
+             f'Final prediction: {prediction_value:.3f}', 
+             ha='center', va='center', bbox=dict(facecolor='white', alpha=0.7))
+    
+    # Add title and labels
+    plt.title(f'SHAP Explanation for Class {class_idx} Prediction')
+    plt.xlabel('SHAP Value (Impact on Prediction)')
+    plt.xlim(min(base_value - abs(base_value)*0.5, base_value + min(0, total_shap) - 0.1),
+             max(base_value + abs(base_value)*0.5, base_value + max(0, total_shap) + 0.1))
+    
+    plt.tight_layout()
+    return fig
+
+# Alternative simpler SHAP visualization function as backup
+def get_simple_shap_plot(model, processed_data, features, class_idx):
+    """Generate a simpler SHAP bar plot for explanation (backup option)"""
+    # Create background and explainer
+    explainer = shap.KernelExplainer(
+        lambda x: model.predict_proba(x)[:, class_idx],
+        shap.sample(processed_data, 5)
     )
     
-    # Adjust layout
-    fig.tight_layout()
+    # Calculate SHAP values
+    shap_values = explainer.shap_values(processed_data)
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 4))
+    
+    # Plot bar chart of SHAP values
+    y_pos = np.arange(len(features))
+    bars = ax.barh(y_pos, shap_values, align='center')
+    
+    # Color bars based on contribution direction
+    for i, bar in enumerate(bars):
+        bar.set_color('#ff4d4d' if shap_values[i] > 0 else '#1e88e5')
+    
+    # Add feature names
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(features)
+    
+    # Add labels and title
+    ax.set_xlabel('SHAP Value (Impact on Prediction)')
+    ax.set_title(f'Feature Importance for Class {class_idx} Prediction')
+    
+    # Add a vertical line at x=0
+    ax.axvline(x=0, color='black', linestyle='-', alpha=0.3)
+    
+    plt.tight_layout()
     return fig
 
 def main():
@@ -175,19 +260,30 @@ def main():
         # Display SHAP explanation
         st.header("Prediction Explanation")
         
-        # Get SHAP visualization
+        # Get SHAP visualization - try the custom waterfall plot first
         class_to_explain = int(prediction)  # 0 or 1 based on prediction
-        fig = get_shap_plot(model, processed_input, input_data, features, class_to_explain)
         
-        # Display the plot
-        st.pyplot(fig)
+        try:
+            # Try the custom waterfall SHAP plot first
+            fig = get_shap_plot(model, processed_input, input_data, features, class_to_explain)
+            # Display the plot
+            st.pyplot(fig)
+        except Exception as e:
+            st.warning("Advanced visualization unavailable. Showing simplified explanation.")
+            # If that fails, use the simpler bar plot
+            try:
+                fig = get_simple_shap_plot(model, processed_input, features, class_to_explain)
+                st.pyplot(fig)
+            except Exception as e2:
+                st.error("Unable to generate explanation visualization.")
+                st.write(f"Error details: {str(e2)}")
         
         # Add explanation text
         st.markdown("""
         <div class="explanation">
-            <p><strong>How to interpret:</strong> The SHAP force plot above shows how each feature contributed to the prediction.
-            Red arrows push the prediction higher (toward seroconversion), while blue arrows push it lower (against seroconversion).
-            The width of each arrow indicates the magnitude of that feature's impact.</p>
+            <p><strong>How to interpret:</strong> The SHAP plot above shows how each feature contributed to the prediction.
+            Red bars push the prediction higher (toward seroconversion), while blue bars push it lower (against seroconversion).
+            The length of each bar indicates the magnitude of that feature's impact.</p>
         </div>
         """, unsafe_allow_html=True)
         
