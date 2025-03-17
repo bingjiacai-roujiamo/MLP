@@ -1,9 +1,11 @@
 import streamlit as st
 import joblib
 import pandas as pd
+import shap
+import matplotlib.pyplot as plt
 
 # Load the saved model
-saved_model = joblib.load('mlp_final_model.pkl')
+saved_model = joblib.load('models/mlp_final_model.pkl')
 final_model = saved_model['model']
 final_preprocessor = saved_model['preprocessor']
 selected_features = saved_model['features']
@@ -28,9 +30,26 @@ if st.button('Predict'):
     
     # Make a prediction
     prediction_proba = final_model.predict_proba(processed_input)[:, 1][0]
-    prediction = 'Surface Antigen Seroconversion' if prediction_proba >= 0.5 else 'No Surface Antigen Seroconversion'
+    prediction = 1 if prediction_proba >= 0.5 else 0
+    prediction_text = 'Surface Antigen Seroconversion' if prediction == 1 else 'No Surface Antigen Seroconversion'
     
     # Display the prediction results
     st.subheader('Prediction Result')
-    st.write(f'Predicted Classification: {prediction}')
+    st.write(f'Predicted Classification: {prediction_text}')
     st.write(f'Prediction Probability: {prediction_proba:.4f}')
+
+    # Calculate SHAP values
+    background_samples = shap.sample(pd.DataFrame(processed_input, columns=final_preprocessor.get_feature_names_out()), 50, random_state=42)
+    explainer = shap.KernelExplainer(final_model.predict_proba, background_samples)
+    shap_values = explainer.shap_values(processed_input)
+
+    # Select the appropriate SHAP values based on the prediction
+    shap_values_to_display = shap_values[prediction]
+
+    # Create a DataFrame for the original input data
+    input_original_df = pd.DataFrame(input_data)
+
+    # Plot SHAP waterfall plot with original values
+    fig, ax = plt.subplots()
+    shap.plots.waterfall(shap.Explanation(values=shap_values_to_display[0], base_values=explainer.expected_value[prediction], data=input_original_df.values[0], feature_names=selected_features), show=False)
+    st.pyplot(fig)
